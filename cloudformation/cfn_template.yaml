@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: MLFlow CloudFormation template
+
+Resources:
+  S3Bucket:
+    DeletionPolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: custom-deploy-mlflow
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldObjectVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 7
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Name
+          Value: MLFlow-S3
+
+  ApplicationIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:Get*'
+                  - 's3:List*'
+                  - 's3:Put*'
+                Resource:
+                  - !GetAtt S3Bucket.Arn
+                  - !Sub '{S3Bucket.Arn}/*'
+
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/{{resolve:ssm:/eks/cluster/oidc-id}}'
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                  "{{resolve:ssm:/eks/cluster/oidc-id}}:sub": 'system:serviceaccount:custom-deploy:mlflow'
+      Path: '/'
+      RoleName: custom-deploy-iam-role-mlflow
+      Tags:
+        - Key: Name
+          Value: MLFlow-IAM
+
+  RDSDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      BackupRetentionPeriod: 5
+      CopyTagsToSnapshot: true
+      DBInstanceClass: db.t4g.small
+      DBInstanceIdentifier:  mlflow-db
+      DBSubnetGroupName: !Ref RDSDatabaseSubnetGroup
+      DBName: mlflow
+      DeletionProtection: true
+      Engine: MySQL
+      EngineVersion: 8.0.33
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RDSDatabaseSecret}::username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RDSDatabaseSecret}::password}}"
+      MultiAZ: false
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref RDSDatabaseSecurityGroup
+      StorageType: gp3
+      Tags:
+        - Key: Name
+          Value: MLFlow-RDS
+
+  RDSDatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      DBSubnetGroupName: MLFlowRDSDatabaseSubnetGroup
+      SubnetIds: !Split [ ',', !ImportValue PrivateSubnets ]
+      Tags:
+        - Key: Name
+          Value: MLFlow-RDS
+
+  RDSDatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS Database Security Group
+      GroupName: MLFlowRDSDatabaseSecurityGroup
+      SecurityGroupIngress:
+        - Description: Access from EKS cluster to RDS
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !ImportValue EKSClusterWorkerNodesSecurityGroup
+        - Description: Access from BastionHost to RDS
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !ImportValue BastionHostSecurityGroup
+      VpcId: !ImportValue VpcId
+      Tags:
+        - Key: Name
+          Value: MLFlow-EC2
+
+  Route53RecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join [ '', [ !ImportValue CustomDeployDomainName, '.' ] ]
+      RecordSets:
+        - AliasTarget:
+            DNSName: !ImportValue EKSPublicElasticLoadBalancerDNSName
+            HostedZoneId: !ImportValue EKSPublicElasticLoadBalancerCanonicalHostedZoneID
+          Name: !Join [ '.', [ mlflow, !ImportValue CustomDeployDomainName ] ]
+          Type: A
+        - ResourceRecords:
+            - !GetAtt RDSDatabase.Endpoint.Address
+          TTL: 300
+          Name: !Join [ '.', [ mlflow-db, !ImportValue CustomDeployDomainName ] ]
+          Type: CNAME
+
+  RDSDatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Secrets Manager secret for RDS database admin user
+      Name: MLFlowRDSDatabaseSecret
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "admin"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: "\"'@/\\"
+
+  RDSDatabaseSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId:
+        Ref: RDSDatabaseSecret
+      TargetId:
+        Ref: RDSDatabase
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+    S3Bucket:
+      Description: S3Bucket
+      Value: !Ref S3Bucket
+      Export:
+        Name: S3Bucket
