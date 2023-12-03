@@ -8,3 +8,10 @@ aws cloudformation deploy --no-execute-changeset \
   --capabilities CAPABILITY_NAMED_IAM \
   --profile <profile-name>
 ```
+
+It's a good practice to check if the template adhers to best practices. To check whether refactoring is needed, use [cfn-lint](https://github.com/aws-cloudformation/cfn-lint).
+
+```bash
+pip install cfn-lint
+cfn-lint cfn_template.yaml
+```
