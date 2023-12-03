@@ -9,7 +9,7 @@ aws cloudformation deploy --no-execute-changeset \
   --profile <profile-name>
 ```
 
-It's a good practice to check if the template adhers to best practices. To check whether refactoring is needed, use [cfn-lint](https://github.com/aws-cloudformation/cfn-lint).
+To check if the template adhers to best practices use [cfn-lint](https://github.com/aws-cloudformation/cfn-lint).
 
 ```bash
 pip install cfn-lint
