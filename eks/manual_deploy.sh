@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-CLUSTER_NAME=$1
 set -eu
+CLUSTER_NAME=$1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export KUBECONFIG="${HOME}/.kube/${CLUSTER_NAME?}"
